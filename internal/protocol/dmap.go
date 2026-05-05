@@ -705,6 +705,54 @@ func ParseDecrCommand(cmd redcon.Command) (*Decr, error) {
 	), nil
 }
 
+type IncrWithTTL struct {
+	DMap      string
+	Key       string
+	Delta     int
+	TTLMillis int64
+}
+
+func NewIncrWithTTL(dmap, key string, delta int, ttlMillis int64) *IncrWithTTL {
+	return &IncrWithTTL{
+		DMap:      dmap,
+		Key:       key,
+		Delta:     delta,
+		TTLMillis: ttlMillis,
+	}
+}
+
+func (i *IncrWithTTL) Command(ctx context.Context) *redis.Cmd {
+	var args []interface{}
+	args = append(args, DMap.IncrWithTTL)
+	args = append(args, i.DMap)
+	args = append(args, i.Key)
+	args = append(args, i.Delta)
+	args = append(args, i.TTLMillis)
+	return redis.NewCmd(ctx, args...)
+}
+
+func ParseIncrWithTTLCommand(cmd redcon.Command) (*IncrWithTTL, error) {
+	if len(cmd.Args) < 5 {
+		return nil, errWrongNumber(cmd.Args)
+	}
+
+	delta, err := strconv.Atoi(util.BytesToString(cmd.Args[3]))
+	if err != nil {
+		return nil, err
+	}
+	ttlMillis, err := strconv.ParseInt(util.BytesToString(cmd.Args[4]), 10, 64)
+	if err != nil {
+		return nil, err
+	}
+
+	return NewIncrWithTTL(
+		util.BytesToString(cmd.Args[1]),
+		util.BytesToString(cmd.Args[2]),
+		delta,
+		ttlMillis,
+	), nil
+}
+
 type GetPut struct {
 	DMap  string
 	Key   string

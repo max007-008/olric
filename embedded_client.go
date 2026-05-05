@@ -239,6 +239,13 @@ func (dm *EmbeddedDMap) Incr(ctx context.Context, key string, delta int) (int, e
 	return dm.dm.Incr(ctx, key, delta)
 }
 
+// IncrWithTTL atomically increments the key by delta and sets the TTL when the
+// updated value equals delta. It returns the updated value and absolute TTL in
+// Unix milliseconds.
+func (dm *EmbeddedDMap) IncrWithTTL(ctx context.Context, key string, delta int, timeout time.Duration) (int, int64, error) {
+	return dm.dm.IncrWithTTL(ctx, key, delta, timeout)
+}
+
 // IncrByFloat atomically increments the key by delta. The return value is the new value after being incremented or an error.
 func (dm *EmbeddedDMap) IncrByFloat(ctx context.Context, key string, delta float64) (float64, error) {
 	return dm.dm.IncrByFloat(ctx, key, delta)

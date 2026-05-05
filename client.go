@@ -174,6 +174,11 @@ type DMap interface {
 	// after being incremented or an error.
 	Incr(ctx context.Context, key string, delta int) (int, error)
 
+	// IncrWithTTL atomically increments the key by delta and sets the TTL when
+	// the updated value equals delta. It returns the updated value and the
+	// absolute TTL in Unix milliseconds. Existing TTLs are preserved.
+	IncrWithTTL(ctx context.Context, key string, delta int, timeout time.Duration) (int, int64, error)
+
 	// Decr atomically decrements the key by delta. The return value is the new value
 	// after being decremented or an error.
 	Decr(ctx context.Context, key string, delta int) (int, error)

@@ -235,6 +235,37 @@ func (dm *ClusterDMap) Incr(ctx context.Context, key string, delta int) (int, er
 	return int(res), nil
 }
 
+// IncrWithTTL atomically increments the key by delta and sets the TTL when the
+// updated value equals delta. It returns the updated value and absolute TTL in
+// Unix milliseconds.
+func (dm *ClusterDMap) IncrWithTTL(ctx context.Context, key string, delta int, timeout time.Duration) (int, int64, error) {
+	rc, err := dm.clusterClient.smartPick(dm.name, key)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	cmd := protocol.NewIncrWithTTL(dm.name, key, delta, timeout.Milliseconds()).Command(ctx)
+	if err := rc.Process(ctx, cmd); err != nil {
+		return 0, 0, processProtocolError(err)
+	}
+	items, err := cmd.Slice()
+	if err != nil {
+		return 0, 0, processProtocolError(err)
+	}
+	if len(items) != 2 {
+		return 0, 0, fmt.Errorf("unexpected IncrWithTTL reply length %d", len(items))
+	}
+	value, ok := items[0].(int64)
+	if !ok {
+		return 0, 0, fmt.Errorf("unexpected IncrWithTTL reply type for value: %T", items[0])
+	}
+	ttl, ok := items[1].(int64)
+	if !ok {
+		return 0, 0, fmt.Errorf("unexpected IncrWithTTL reply type for ttl: %T", items[1])
+	}
+	return int(value), ttl, nil
+}
+
 // Decr atomically decrements the key by delta. The return value is the new value
 // after being decremented or an error.
 func (dm *ClusterDMap) Decr(ctx context.Context, key string, delta int) (int, error) {

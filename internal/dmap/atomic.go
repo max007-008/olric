@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/olric-data/olric/internal/cluster/partitions"
 	"github.com/olric-data/olric/internal/protocol"
 	"github.com/olric-data/olric/internal/resp"
 	"github.com/olric-data/olric/internal/util"
@@ -70,16 +71,10 @@ func (dm *DMap) atomicIncrDecr(cmd string, e *env, delta int) (int, error) {
 		return 0, fmt.Errorf("invalid operation")
 	}
 
-	valueBuf := pool.Get()
-	defer pool.Put(valueBuf)
-
-	enc := resp.New(valueBuf)
-	err = enc.Encode(updated)
+	e.value, err = encodeAtomicInt(updated)
 	if err != nil {
 		return 0, err
 	}
-	e.value = make([]byte, valueBuf.Len())
-	copy(e.value, valueBuf.Bytes())
 
 	if ttl != 0 {
 		e.putConfig.HasPX = true
@@ -93,12 +88,104 @@ func (dm *DMap) atomicIncrDecr(cmd string, e *env, delta int) (int, error) {
 	return updated, nil
 }
 
+func encodeAtomicInt(value int) ([]byte, error) {
+	valueBuf := pool.Get()
+	defer pool.Put(valueBuf)
+
+	enc := resp.New(valueBuf)
+	if err := enc.Encode(value); err != nil {
+		return nil, err
+	}
+	encoded := make([]byte, valueBuf.Len())
+	copy(encoded, valueBuf.Bytes())
+	return encoded, nil
+}
+
 // Incr atomically increments key by delta. The return value is the new value after being incremented or an error.
 func (dm *DMap) Incr(ctx context.Context, key string, delta int) (int, error) {
 	e := newEnv(ctx)
 	e.dmap = dm.name
 	e.key = key
 	return dm.atomicIncrDecr(protocol.DMap.Incr, e, delta)
+}
+
+func (dm *DMap) atomicIncrWithTTL(e *env, delta int, timeout time.Duration) (int, int64, error) {
+	atomicKey := e.dmap + e.key
+	dm.s.locker.Lock(atomicKey)
+	defer func() {
+		err := dm.s.locker.Unlock(atomicKey)
+		if err != nil {
+			dm.s.log.V(3).Printf("[ERROR] Failed to release the fine grained lock for key: %s on DMap: %s: %v", e.key, e.dmap, err)
+		}
+	}()
+
+	current, ttl, err := dm.loadCurrentAtomicInt(e)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	updated := current + delta
+	e.value, err = encodeAtomicInt(updated)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	if ttl != 0 {
+		e.putConfig.HasPXAT = true
+		e.putConfig.PXAT = time.Duration(ttl) * time.Millisecond
+	}
+	if updated == delta && timeout > 0 {
+		ttl = (timeout.Nanoseconds() + time.Now().UnixNano()) / 1000000
+		e.putConfig.HasPXAT = true
+		e.putConfig.PXAT = time.Duration(ttl) * time.Millisecond
+	}
+
+	if err := dm.put(e); err != nil {
+		return 0, 0, err
+	}
+	return updated, ttl, nil
+}
+
+// IncrWithTTL atomically increments key by delta, sets the TTL when the updated
+// value equals delta, and returns the updated value with the absolute TTL in
+// Unix milliseconds. Existing TTLs are preserved.
+func (dm *DMap) IncrWithTTL(ctx context.Context, key string, delta int, timeout time.Duration) (int, int64, error) {
+	hkey := partitions.HKey(dm.name, key)
+	member := dm.s.primary.PartitionByHKey(hkey).Owner()
+	if member.CompareByName(dm.s.rt.This()) {
+		e := newEnv(ctx)
+		e.dmap = dm.name
+		e.key = key
+		return dm.atomicIncrWithTTL(e, delta, timeout)
+	}
+
+	cmd := protocol.NewIncrWithTTL(dm.name, key, delta, timeout.Milliseconds()).Command(ctx)
+	rc := dm.s.client.Get(member.String())
+	if err := rc.Process(ctx, cmd); err != nil {
+		return 0, 0, protocol.ConvertError(err)
+	}
+	if err := cmd.Err(); err != nil {
+		return 0, 0, protocol.ConvertError(err)
+	}
+	return decodeIncrWithTTLReply(cmd.Slice())
+}
+
+func decodeIncrWithTTLReply(items []interface{}, err error) (int, int64, error) {
+	if err != nil {
+		return 0, 0, protocol.ConvertError(err)
+	}
+	if len(items) != 2 {
+		return 0, 0, fmt.Errorf("unexpected IncrWithTTL reply length %d", len(items))
+	}
+	value, ok := items[0].(int64)
+	if !ok {
+		return 0, 0, fmt.Errorf("unexpected IncrWithTTL reply type for value: %T", items[0])
+	}
+	ttl, ok := items[1].(int64)
+	if !ok {
+		return 0, 0, fmt.Errorf("unexpected IncrWithTTL reply type for ttl: %T", items[1])
+	}
+	return int(value), ttl, nil
 }
 
 // Decr atomically decrements key by delta. The return value is the new value after being decremented or an error.

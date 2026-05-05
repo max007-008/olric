@@ -282,6 +282,57 @@ func TestDMap_incrCommandHandler_Single_Request(t *testing.T) {
 	require.Equal(t, 100, int(value))
 }
 
+func TestDMap_IncrWithTTL(t *testing.T) {
+	cluster := testcluster.New(NewService)
+	s := cluster.AddMember(nil).(*Service)
+	defer cluster.Shutdown()
+
+	ctx := context.Background()
+	dm, err := s.NewDMap("mydmap")
+	require.NoError(t, err)
+
+	nowMillis := time.Now().UnixMilli()
+	value, ttl, err := dm.IncrWithTTL(ctx, "mykey", 1, time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, 1, value)
+	require.Greater(t, ttl, nowMillis)
+
+	entry, err := dm.Get(ctx, "mykey")
+	require.NoError(t, err)
+	require.Equal(t, ttl, entry.TTL())
+
+	value, nextTTL, err := dm.IncrWithTTL(ctx, "mykey", 1, time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, 2, value)
+	require.Equal(t, ttl, nextTTL)
+
+	entry, err = dm.Get(ctx, "mykey")
+	require.NoError(t, err)
+	require.Equal(t, ttl, entry.TTL())
+	var stored int
+	require.NoError(t, resp.Scan(entry.Value(), &stored))
+	require.Equal(t, 2, stored)
+}
+
+func TestDMap_incrWithTTLCommandHandler(t *testing.T) {
+	cluster := testcluster.New(NewService)
+	s := cluster.AddMember(nil).(*Service)
+	defer cluster.Shutdown()
+
+	cmd := protocol.NewIncrWithTTL("mydmap", "mykey", 1, int64(time.Minute/time.Millisecond)).Command(context.Background())
+	rc := s.client.Get(s.rt.This().String())
+	err := rc.Process(context.Background(), cmd)
+	require.NoError(t, err)
+
+	items, err := cmd.Slice()
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	require.Equal(t, int64(1), items[0])
+	ttl, ok := items[1].(int64)
+	require.True(t, ok)
+	require.Greater(t, ttl, time.Now().UnixMilli())
+}
+
 func TestDMap_decrCommandHandler(t *testing.T) {
 	cluster := testcluster.New(NewService)
 	s := cluster.AddMember(nil).(*Service)

@@ -64,6 +64,7 @@ type DMapCommands struct {
 	Query       string
 	Incr        string
 	Decr        string
+	IncrWithTTL string
 	GetPut      string
 	IncrByFloat string
 	Lock        string
@@ -85,6 +86,7 @@ var DMap = &DMapCommands{
 	Destroy:     "dm.destroy",
 	Incr:        "dm.incr",
 	Decr:        "dm.decr",
+	IncrWithTTL: "dm.incrwithttl",
 	GetPut:      "dm.getput",
 	IncrByFloat: "dm.incrbyfloat",
 	Lock:        "dm.lock",

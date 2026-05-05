@@ -16,6 +16,7 @@ package dmap
 
 import (
 	"strconv"
+	"time"
 
 	"github.com/olric-data/olric/internal/protocol"
 	"github.com/tidwall/redcon"
@@ -59,6 +60,33 @@ func (s *Service) decrCommandHandler(conn redcon.Conn, cmd redcon.Command) {
 		return
 	}
 	conn.WriteInt(latest)
+}
+
+func (s *Service) incrWithTTLCommandHandler(conn redcon.Conn, cmd redcon.Command) {
+	incrCmd, err := protocol.ParseIncrWithTTLCommand(cmd)
+	if err != nil {
+		protocol.WriteError(conn, err)
+		return
+	}
+
+	dm, err := s.getOrCreateDMap(incrCmd.DMap)
+	if err != nil {
+		protocol.WriteError(conn, err)
+		return
+	}
+
+	e := newEnv(s.ctx)
+	e.dmap = dm.name
+	e.key = incrCmd.Key
+	latest, ttl, err := dm.atomicIncrWithTTL(e, incrCmd.Delta, time.Duration(incrCmd.TTLMillis)*time.Millisecond)
+	if err != nil {
+		protocol.WriteError(conn, err)
+		return
+	}
+
+	conn.WriteArray(2)
+	conn.WriteInt(latest)
+	conn.WriteInt64(ttl)
 }
 
 func (s *Service) getPutCommandHandler(conn redcon.Conn, cmd redcon.Command) {
